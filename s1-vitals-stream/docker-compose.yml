@@ -31,6 +31,27 @@ services:
     networks:
       - vitals-net
 
+  postgres:
+    image: cgr.dev/chainguard/postgres:latest@sha256:0926ac7262a2c1963179eb939cd5d610e1be3ecca90b4b5cad8db8df16fab87e
+    container_name: vitals-postgres
+    ports:
+      - "55432:5432"
+    environment:
+      POSTGRES_DB: healthstream
+      POSTGRES_USER: hs_user
+      POSTGRES_PASSWORD: hs_password
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./sql/init.sql:/var/lib/postgres/initdb/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hs_user -d healthstream"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - vitals-net
+
   producer:
     build:
       context: ./producer
@@ -47,14 +68,40 @@ services:
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
       VITALS_TOPIC: mimic-vitals
+      INTERVAL_S: "${INTERVAL_S:-1.0}"
     volumes:
       - vitals-logs:/app/logs
+    networks:
+      - vitals-net
+
+  consumer:
+    build:
+      context: ./consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      VITALS_TOPIC: mimic-vitals
+      CONSUMER_GROUP: vitals-persister
+      AUTO_OFFSET_RESET: earliest
+      BATCH_SIZE: "${BATCH_SIZE:-200}"
+      BATCH_TIMEOUT_S: "5.0"
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: healthstream
+      PG_USER: hs_user
+      PG_PASSWORD: hs_password
     networks:
       - vitals-net
 
 volumes:
   vitals-logs:
   kafka-logs:
+  pg-data:
 
 networks:
   vitals-net:
